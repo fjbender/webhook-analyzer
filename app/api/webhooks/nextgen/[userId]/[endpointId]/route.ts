@@ -109,67 +109,35 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
     }
 
     // Extract signature from headers
-    // Mollie uses X-Mollie-Signature or Mollie-Signature header
-    const signatureHeader = request.headers.get("x-mollie-signature") || 
-                           request.headers.get("mollie-signature") || 
-                           "";
-
-    if (!signatureHeader) {
-      const processingTime = Date.now() - startTime;
-      await WebhookLog.create({
-        endpointId: endpointId,
-        userId: userId,
-        receivedAt: new Date(),
-        processingTimeMs: processingTime,
-        requestHeaders: headers,
-        requestBody: body,
-        rawBody: rawBody,
-        ipAddress,
-        userAgent,
-        status: "signature_failed",
-        signatureValid: false,
-      });
-
-      return NextResponse.json(
-        { error: "Missing signature header" },
-        { status: 401 }
-      );
-    }
-
-    // Verify the signature
-    if (!endpoint.sharedSecret) {
-      const processingTime = Date.now() - startTime;
-      await WebhookLog.create({
-        endpointId: endpointId,
-        userId: userId,
-        receivedAt: new Date(),
-        processingTimeMs: processingTime,
-        requestHeaders: headers,
-        requestBody: body,
-        rawBody: rawBody,
-        ipAddress,
-        userAgent,
-        signatureHeader,
-        status: "signature_failed",
-        signatureValid: false,
-      });
-
-      return NextResponse.json(
-        { error: "No shared secret configured" },
-        { status: 500 }
-      );
-    }
-
-    // Decrypt the shared secret
-    const decryptedSecret = decrypt(endpoint.sharedSecret);
-
-    // Verify the HMAC signature
-    const isValidSignature = verifySignature(rawBody, signatureHeader, decryptedSecret);
+    // Mollie uses x-mollie-signature header (lowercase)
+    const signatureHeader = request.headers.get("x-mollie-signature") || "";
 
     // Extract event type from payload if available
-    const eventType = body.event || body.type || body.eventType || undefined;
+    // Mollie's actual field is "type" not "event"
+    const eventType = body.type || body.event || body.eventType || undefined;
 
-    // Check if event type matches filter (if set)
+    let isValidSignature = false;
+    let signatureError: string | undefined;
+
+    // Verify the signature if we have both header and shared secret
+    if (signatureHeader && endpoint.sharedSecret) {
+      try {
+        const decryptedSecret = decrypt(endpoint.sharedSecret);
+        isValidSignature = verifySignature(rawBody, signatureHeader, decryptedSecret);
+        
+        if (!isValidSignature) {
+          signatureError = "Signature verification failed";
+        }
+      } catch (error) {
+        signatureError = error instanceof Error ? error.message : "Signature verification error";
+      }
+    } else if (!signatureHeader) {
+      signatureError = "Missing signature header";
+    } else if (!endpoint.sharedSecret) {
+      signatureError = "No shared secret configured";
+    }
+
+    // Check if event type matches filter (if set and signature is valid)
     if (isValidSignature && endpoint.eventTypeFilter && endpoint.eventTypeFilter.length > 0) {
       if (eventType && !endpoint.eventTypeFilter.includes(eventType)) {
         // Silently ignore webhooks that don't match the filter
@@ -177,7 +145,7 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
       }
     }
 
-    // Store the webhook log
+    // Store the webhook log - ALWAYS store, regardless of signature validity
     const processingTime = Date.now() - startTime;
     const status = isValidSignature ? "success" : "signature_failed";
 
@@ -194,6 +162,7 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
       eventType,
       signatureValid: isValidSignature,
       signatureHeader,
+      fetchError: signatureError, // Store signature error in fetchError field
       status,
     });
 
@@ -211,15 +180,13 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
       }
     }
 
-    // Return appropriate response
-    if (!isValidSignature) {
-      return NextResponse.json(
-        { error: "Invalid signature" },
-        { status: 401 }
-      );
-    }
-
-    return NextResponse.json({ ok: true });
+    // ALWAYS return 200 OK to prevent Mollie from retrying
+    // This allows us to capture and inspect invalid webhooks
+    return NextResponse.json({ 
+      ok: true, 
+      signatureValid: isValidSignature,
+      ...(signatureError && { warning: signatureError })
+    });
 
   } catch (error) {
     console.error("Error processing next-gen webhook:", error);

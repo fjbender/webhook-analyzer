@@ -260,11 +260,16 @@ export function WebhookDetailModal({ log, open, onClose }: Props) {
               {log.signatureValid !== undefined && (
                 <div>
                   <label className="text-sm font-medium">Signature Verification</label>
-                  <div className="mt-1">
+                  <div className="mt-1 space-y-1">
                     {log.signatureValid ? (
-                      <Badge className="bg-green-600">Valid</Badge>
+                      <Badge className="bg-green-600">Valid ✓</Badge>
                     ) : (
-                      <Badge variant="destructive">Invalid</Badge>
+                      <Badge variant="destructive">Invalid ✗</Badge>
+                    )}
+                    {!log.signatureValid && log.fetchError && (
+                      <p className="text-xs text-muted-foreground mt-1">
+                        {log.fetchError}
+                      </p>
                     )}
                   </div>
                 </div>
