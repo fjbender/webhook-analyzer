@@ -6,7 +6,10 @@ export async function middleware(request: NextRequest) {
   const token = await getToken({ 
     req: request,
     secret: process.env.NEXTAUTH_SECRET,
+    // Ensure we check the correct cookie name
+    secureCookie: process.env.NODE_ENV === "production",
   });
+  
   const isAuth = !!token;
   const isAuthPage = request.nextUrl.pathname.startsWith("/login") || 
                     request.nextUrl.pathname.startsWith("/register");
